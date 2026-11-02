@@ -1,0 +1,284 @@
+diff --git a/mol/config/base.py b/mol/config/base.py
+index b71ee2c..1ab238d 100644
+--- a/mol/config/base.py
++++ b/mol/config/base.py
+@@ -19,6 +19,7 @@
+ # Upstream file: configs/configs_base.py
+ 
+ # pylint: disable=C0114,C0301
++import os
+ from mol.config.types import (
+     GlobalConfigValue,
+     ListValue,
+@@ -201,6 +202,88 @@ model_configs = {
+         "N_sample": 5,
+         "N_step_mini_rollout": 20,
+         "N_sample_mini_rollout": 1,
++        "guidance": {
++            # config for Training-Free Guidance (TFG).
++            "enable": False,
++            "log_last_step_energy": True,
++            "rho": 0.0,
++            "mu": 0.1,
++            "mc": {
++                "std": 0.0,
++                "batch": 1,
++            },
++            "steps": {
++                "tfg_outer": 1,
++                "tfg_inner": 20,
++                "projection_outer": 2,
++                "projection_inner": 10,
++            },
++            "terms": {
++                "VinaStericPotential": {
++                    "interval": 1,
++                    "weight": 0.1,
++                    "buffer": 0.225,
++                },
++                "ExperimentalTorsionPotential": {
++                    "interval": 1,
++                    "weight": 0.0015,
++                },
++                "InterchainBondPotential": {
++                    "interval": 1,
++                    "weight": 0.15,
++                    "buffer": 2.0,
++                },
++                "PairwiseDistancePotential": {
++                    "interval": 1,
++                    "weight": 0.5,
++                    "enable_projection": True,
++                    "bond_buffer": 0.00,
++                    "angle_buffer": 0.00,
++                    "clash_buffer": 0.00,
++                },
++                "ChiralAtomPotential": {
++                    "interval": 1,
++                    "weight": 0.0,
++                    "enable_projection": True,
++                    "buffer": 0.6155,
++                },
++                "StereoBondPotential": {
++                    "interval": 1,
++                    "weight": 0.25,
++                    "buffer": 0.52360,
++                },
++                "PlanarImproperPotential": {
++                    "interval": 1,
++                    "weight": 0.12,
++                },
++                "LinearBondPotential": {
++                    "interval": 1,
++                    "weight": 0.25,
++                    "buffer": 0.08726646259,
++                },
++                # Pocket targeting for the OpenBind blind-challenge pocket arms.
++                # INERT by default: `interval: 0` makes Term.active() False at
++                # every step, so the term is never evaluated unless a run raises
++                # the interval.  It is declared here only because the config CLI
++                # can override existing keys but cannot add new ones.
++                # The residue set itself comes from MOL_POCKET_JSON /
++                # MOL_POCKET_ID, since a nested per-chain residue dict is
++                # not expressible as a CLI override.
++                # Mol-1's inference runner calls parse_configs() with no
++                # arg_str, so inference takes NO config CLI overrides and these
++                # have to come from the environment -- the same route this fork
++                # already uses for the kernel choices.
++                # Default interval 0 makes Term.active() False at every step, so
++                # the term is inert unless a pocket run raises it.
++                "PocketPotential": {
++                    "interval": int(os.environ.get("MOL_POCKET_INTERVAL", "0")),
++                    "weight": float(os.environ.get("MOL_POCKET_WEIGHT", "0.0")),
++                    "radius": float(os.environ.get("MOL_POCKET_RADIUS", "5.0")),
++                    "strict": os.environ.get("MOL_POCKET_STRICT", "1") not in ("0", "", "false", "False"),
++                    "enable_projection": False,
++                },
++            },
++        },
+     },
+     "model": {
+         "N_model_seed": 1,  # for inference
+diff --git a/mol/data/inference/infer_dataloader.py b/mol/data/inference/infer_dataloader.py
+index d78ff7b..21c8796 100644
+--- a/mol/data/inference/infer_dataloader.py
++++ b/mol/data/inference/infer_dataloader.py
+@@ -138,6 +138,7 @@ class InferenceDataset(Dataset):
+         t0 = time.time()
+         sample2feat = SampleDictToFeatures(
+             single_sample_dict,
++            extract_features_for_tfg=self.configs.sample_diffusion.guidance.enable,
+         )
+         features_dict, atom_array, token_array = sample2feat.get_feature_dict()
+         features_dict["distogram_rep_atom_mask"] = torch.Tensor(
+diff --git a/mol/data/inference/json_to_feature.py b/mol/data/inference/json_to_feature.py
+index 90685f9..a07ba10 100644
+--- a/mol/data/inference/json_to_feature.py
++++ b/mol/data/inference/json_to_feature.py
+@@ -26,6 +26,7 @@ import torch
+ from biotite.structure import AtomArray
+ 
+ from mol.data.core.featurizer import Featurizer
++from mol.data.core.geometry_featurizer import GeometryFeaturizer
+ from mol.data.core.parser import AddAtomArrayAnnot
+ from mol.data.inference.json_parser import (
+     add_entity_atom_array,
+@@ -40,9 +41,11 @@ logger = get_logger(__name__)
+ 
+ class SampleDictToFeatures:
+     def __init__(
+-        self, single_sample_dict: dict[str, Any]
++        self, single_sample_dict: dict[str, Any],
++        extract_features_for_tfg: bool = False,
+     ) -> None:
+         self.single_sample_dict = single_sample_dict
++        self.extract_features_for_tfg = extract_features_for_tfg
+         self.input_dict = add_entity_atom_array(single_sample_dict)
+         self.entity_poly_type_and_seqs = self.get_entity_poly_type_and_seqs()
+         self.entity_poly_type = self.entity_poly_type_and_seqs["entity_poly_type"]
+@@ -384,4 +387,20 @@ class SampleDictToFeatures:
+         feature_dict["frame_atom_index"] = torch.Tensor(
+             token_array_with_frame.get_annotation("frame_atom_index")
+         ).long()
++        if self.extract_features_for_tfg:
++            # The geometry/stereochemistry constraints the TFG potentials act on.
++            # `ccd_mols` is what makes this work for a SMILES ligand: the parser
++            # gives each one a synthetic res_name (l01, l02, ...) and keeps the
++            # RDKit mol built from the SMILES, so the featurizer can read bond
++            # orders, chiral tags and double-bond stereo that the AtomArray alone
++            # does not carry. exclude_std_residue=True keeps this to the ligand
++            # and any non-standard component -- standard residues get their
++            # geometry from the model, not from guidance.
++            geometry_featurizer = GeometryFeaturizer(
++                atom_array,
++                ccd_mols=self.input_dict["ccd_mols"],
++                exclude_std_residue=True,
++            )
++            feature_dict.update(geometry_featurizer.get_features())
++
+         return feature_dict, atom_array, token_array
+diff --git a/mol/model/generator.py b/mol/model/generator.py
+index b4e8a2f..29e054d 100644
+--- a/mol/model/generator.py
++++ b/mol/model/generator.py
+@@ -24,6 +24,7 @@ from typing import Any, Callable, Optional
+ import torch
+ 
+ from mol.model.modules.transformer import ProjectedPairBiases
++from mol.tfg import TFGEngine, parse_tfg_config
+ from mol.model.utils import centre_random_augmentation
+ from mol.utils.logger import get_logger
+ 
+@@ -145,6 +146,7 @@ def sample_diffusion(
+     attn_chunk_size: Optional[int] = None,
+     enable_efficient_fusion: bool = False,
+     projected_pair_biases: Optional[ProjectedPairBiases] = None,
++    guidance_configs: Optional[dict[str, Any]] = None,
+ ) -> torch.Tensor:
+     """Implements Algorithm 18 in AF3.
+     It performances denoising steps from time 0 to time T.
+@@ -193,6 +195,12 @@ def sample_diffusion(
+         if projected_pair_biases is not None
+         else denoise_net
+     )
++    # Training-Free Guidance. parse_tfg_config(None) returns a disabled config,
++    # so an unguided run takes exactly the path it took before this was added.
++    tfg_cfg = parse_tfg_config(guidance_configs)
++    if tfg_cfg.enable:
++        logger.info("Guidance is enabled.")
++        tfg = TFGEngine(tfg_cfg, device=device, dtype=dtype)
+     def _chunk_sample_diffusion(chunk_n_sample, inplace_safe):
+         # init noise
+         # [..., N_sample, N_atom, 3]
+@@ -228,26 +236,49 @@ def sample_diffusion(
+                 .to(dtype)
+             )
+ 
+-            x_denoised = request_denoise_net(
+-                x_noisy=x_noisy,
+-                t_hat_noise_level=t_hat,
+-                input_feature_dict=input_feature_dict,
+-                s_inputs=s_inputs,
+-                s_trunk=s_trunk,
+-                z_trunk=z_trunk,
+-                pair_z=pair_z,
+-                p_lm=p_lm,
+-                c_l=c_l,
+-                chunk_size=attn_chunk_size,
+-                inplace_safe=inplace_safe,
+-                enable_efficient_fusion=enable_efficient_fusion,
+-            )
+-
+-            delta = (x_noisy - x_denoised) / t_hat[
+-                ..., None, None
+-            ]  # Line 9 of AF3 uses 'x_l_hat' instead, which we believe  is a typo.
+-            dt = c_tau - t_hat
+-            x_l = x_noisy + step_scale_eta * dt[..., None, None] * delta
++            if tfg_cfg.enable:
++                # The engine performs the denoise call(s), the guidance and the
++                # Euler update itself, and returns x_{c_tau}.
++                x_l = tfg.step(
++                    request_denoise_net,
++                    x=x_noisy,
++                    t_hat=t_hat,
++                    input_feature_dict=input_feature_dict,
++                    s_inputs=s_inputs,
++                    s_trunk=s_trunk,
++                    z_trunk=z_trunk,
++                    pair_z=pair_z,
++                    p_lm=p_lm,
++                    c_l=c_l,
++                    chunk_size=attn_chunk_size,
++                    inplace_safe=inplace_safe,
++                    enable_efficient_fusion=enable_efficient_fusion,
++                    c_tau=c_tau,
++                    step_i=step_i,
++                    num_diffusion_steps=len(noise_schedule) - 1,
++                    step_scale_eta=step_scale_eta,
++                )
++            else:
++                x_denoised = request_denoise_net(
++                    x_noisy=x_noisy,
++                    t_hat_noise_level=t_hat,
++                    input_feature_dict=input_feature_dict,
++                    s_inputs=s_inputs,
++                    s_trunk=s_trunk,
++                    z_trunk=z_trunk,
++                    pair_z=pair_z,
++                    p_lm=p_lm,
++                    c_l=c_l,
++                    chunk_size=attn_chunk_size,
++                    inplace_safe=inplace_safe,
++                    enable_efficient_fusion=enable_efficient_fusion,
++                )
++
++                delta = (x_noisy - x_denoised) / t_hat[
++                    ..., None, None
++                ]  # Line 9 of AF3 uses 'x_l_hat' instead, which we believe  is a typo.
++                dt = c_tau - t_hat
++                x_l = x_noisy + step_scale_eta * dt[..., None, None] * delta
+ 
+         return x_l
+ 
+diff --git a/mol/model/mol.py b/mol/model/mol.py
+index ee02b40..3718802 100644
+--- a/mol/model/mol.py
++++ b/mol/model/mol.py
+@@ -388,6 +388,17 @@ class Mol(nn.Module):
+                 ),
+             }
+         )
++        # Training-Free Guidance config, passed through as a plain dict. Guidance
++        # is an inference-time mechanism: during training sample_diffusion_training
++        # is used instead, and this wrapper's `self.training` branches above
++        # already mark that split.
++        _configs.update(
++            {
++                "guidance_configs": self.configs.sample_diffusion.to_dict().get(
++                    "guidance"
++                )
++            }
++        )
+         return autocasting_disable_decorator(self.configs.skip_amp.sample_diffusion)(
+             sample_diffusion
+         )(**_configs, **kwargs)
