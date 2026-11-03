@@ -1,7 +1,9 @@
 __pycache__/
 *.pyc
 .DS_Store
-data/
-# job logs: the directories ship (sbatch cannot create them), their contents never do
-slurm/*/logs/*
-!slurm/*/logs/.gitkeep
+/data/
+# job logs: run.sh creates the directories at submit time; their contents never ship
+slurm/*/logs/
+# vendored Mol-1 (mol1/): reference data, weights and runtime caches stay outside the repo
+/mol1/data/
+mol1/mol/model/tri_attention/TriAttentionCache/

@@ -22,7 +22,7 @@ set -uo pipefail
 # .json route logs nothing and discards parse errors, so step 4's gate is the ONLY witness that
 # templates reach the features -- an ungated templated arm is unverified, not fine.
 source "${COFOLDER:?submit via slurm/run.sh}/slurm/lib.sh" && cofold_load || exit 1
-mol1_env
+mol1_env || exit 1
 P1=$PIPE/1_template
 
 echo "######## 0 gate: an unmixed pool"

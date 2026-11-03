@@ -11,7 +11,7 @@
 
 # Every arm-config knob. cofold_load UNSETS these before sourcing the arm file, so a value left
 # exported in the submitting shell (a stale SEEDS, a MAXIMIZE from an old confidence ranking)
-# cannot leak into the job through --export=ALL. Keep in sync with config/arms/example.env.
+# cannot leak into the job through --export=ALL. Documented knob by knob in config/README.md.
 COFOLD_KNOBS="POOL SET CKPT_LABEL SCORED
   TEMPLATE_MODE TEMPLATE_BUNDLE TEMPLATE_IDS TEMPLATE_CIF_DIR TEMPLATE_CHAIN EXPECT_TEMPLATES
   EXPECT_COVERAGE GATE_ALL FE_BOND_TABLE MSA_A3M
@@ -39,7 +39,7 @@ cofold_load() {
     # ---- defaults: the measured reference configuration -------------------------------------
     : "${TEMPLATE_MODE:=none}" "${TEMPLATE_CHAIN:=A}" "${EXPECT_TEMPLATES:=4}" "${GATE_ALL:=auto}"
     : "${MSA_A3M:=$DEFAULT_MSA_A3M}"
-    : "${CKPT:=$MOL1/data/checkpoint/mol-1-base.pt}"
+    : "${CKPT:=$MOL1_DATA/checkpoint/mol-1-base.pt}"
     : "${SEEDS:=101,102,103,104,105,106,107,108,109,110}"
     : "${N_SAMPLE:=5}" "${N_STEP:=200}" "${N_CYCLE:=20}"
     # `=` not `:=`: an arm may set MSA_MIN= MSA_CUT= (empty) to get Mol-1's stochastic default
@@ -91,9 +91,11 @@ cofold_load() {
     return 0
 }
 
-# Mol-1 runtime environment (template gate on CPU, generation on GPU).
+# Mol-1 runtime environment (template gate on CPU, generation on GPU). Returns non-zero if the
+# interpreter does not resolve `mol` inside the vendored tree -- always call it as `mol1_env ||
+# exit 1`.
 mol1_env() {
-    export MOL_ROOT_DIR=$MOL1/data PYTHONPATH=$MOL1
+    export MOL_ROOT_DIR=$MOL1_DATA PYTHONPATH=$MOL1
     export TRITON_CACHE_DIR=$ROOT/.triton_cache
     # else torch builds extensions into $HOME, which sits under a 1M inode cap
     export TORCH_EXTENSIONS_DIR=$ROOT/protenix_data/torch_extensions
@@ -103,6 +105,21 @@ mol1_env() {
     # find_kalign() asserts in TemplateFeaturizer.__init__ whenever templates are on, even for the
     # .json route that never aligns -- a startup assertion, so kalign is simply put on PATH
     export PATH=$ENV_KALIGN/bin:$PATH
+
+    # MOL1_PY may carry an editable install of ANOTHER Mol-1 checkout: a .pth whose finder maps
+    # `mol` to that tree. It is appended after PathFinder, so PYTHONPATH wins -- but if PYTHONPATH
+    # is ever lost, `import mol` resolves there instead and the arm silently runs code that is not
+    # in this repo, with nothing in the log to say so. So resolve the package and refuse anything
+    # outside $MOL1. (mol/__init__.py imports only mol/version.py: no torch, no GPU.)
+    local got
+    got=$("$MOL1_PY" -c 'import mol,sys; sys.stdout.write(mol.__file__)' 2>&1) || {
+        echo "FATAL: $MOL1_PY cannot import mol from $MOL1:" >&2; echo "$got" >&2; return 1; }
+    case "$got" in
+        "$MOL1"/*) echo "mol1: $got" ;;
+        *) echo "FATAL: 'import mol' resolved to $got -- OUTSIDE the vendored tree $MOL1." >&2
+           echo "       Build MOL1_PY's venv from mol1/pyproject.toml, or remove the editable" >&2
+           echo "       __editable__*molence*.pth from it (mol1/VENDORED.md)." >&2; return 1 ;;
+    esac
 }
 
 # sub ARGS... : sbatch --parsable with BOTH the exit status and the id checked; echoes the id.

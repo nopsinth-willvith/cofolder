@@ -26,7 +26,7 @@ source "$COFOLDER/slurm/lib.sh"
 cofold_load || exit 1
 cd "$COFOLDER" || exit 1
 L=$COFOLDER/slurm
-mkdir -p "$L"/{1_template,2_cofold,3_rerank}/logs
+mkdir -p "$L"/{1_template,2_cofold,3_rerank,analysis}/logs
 
 queued() { squeue -h --me -o "%i %j %T" 2>/dev/null | awk -v p="$1" '$2 ~ p'; }
 refuse_if_queued() {       # refuse_if_queued <regex> <what>: never double-submit a stage

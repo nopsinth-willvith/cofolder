@@ -22,10 +22,13 @@ below.
 
 ## 1. TFG: training-free chemistry guidance in Mol-1
 
-`mol1_tfg/` back-ports Protenix's Training-Free Guidance into Mol-1: RDKit-derived physical-validity
-potentials (bounds matrix, experimental torsions, stereo, chirality) that **steer the diffusion
-sampler on a stock checkpoint** — no training, no new weights. 4 modules + `geometry_featurizer.py`
-+ `tfg-port.patch` (base `6ad1a13`), applied by `APPLY.md`.
+**Mol-1's inference code is vendored in this repo at `mol1/`, with the port already applied**, so an
+arm runs the model that is committed here. It back-ports Protenix's Training-Free Guidance:
+RDKit-derived physical-validity potentials (bounds matrix, experimental torsions, stereo, chirality)
+that **steer the diffusion sampler on a stock checkpoint** — no training, no new weights. The delta
+against upstream `6ad1a133` is 5 edited files (+166/−21) plus `mol/tfg/` and
+`mol/data/core/geometry_featurizer.py`, kept as `mol1/tfg-port.patch` so it stays auditable;
+`mol1/VENDORED.md` has the provenance, the licence and the environment.
 
 Mol-1 had no guidance machinery at all, and it is lossy about ligand chemistry on the way to the
 model (bond orders discarded, the reference conformer embedded without a seed), so the potentials are
@@ -129,8 +132,8 @@ config/arms/<arm>.env
 ```
 
 ```bash
-cp config/arms/example.env config/arms/myarm.env   # POOL, CKPT_LABEL, the stage-1 block, GUIDANCE
-slurm/run.sh template config/arms/myarm.env        # then: cofold → rerank → select
+$EDITOR config/arms/myarm.env                 # POOL + CKPT_LABEL + stage 1; knobs: config/README.md
+slurm/run.sh template config/arms/myarm.env   # then: cofold → rerank → select
 ```
 
 `run.sh status <arm.env>` shows what exists and what is queued; `DRY_RUN=1` prints the `sbatch`
@@ -146,13 +149,13 @@ stopping before the GPU array and before the scoring spend. None of them decides
 that comparison stays with the user.
 
 ```
-config/cluster.env     WHERE things are: roots, environments, partitions. Edit once per cluster.
-config/arms/<arm>.env  WHAT an arm is: every knob, with its measured default documented
-                       existing/ = the pools already generated · smoke/ = regression configs
+config/cluster.env     WHERE things are: roots, MOL1_DATA, environments, partitions — per cluster
+config/arms/<arm>.env  WHAT an arm is: one file per arm. Every knob: config/README.md
 slurm/run.sh · lib.sh  the only entry point; config loading and the checked sbatch wrapper
 pipeline/<stage>/      durable code: 1_template · 2_cofold · 3_rerank/{mmgbsa,mlff,select}
 analysis/cofold/       post-hoc reports (disposable; run via slurm/analysis/report.sbatch)
-mol1_tfg/ · .claude/   the TFG port · the 4 stage agents and the /cofold skill
+mol1/                  the vendored Mol-1 inference code, TFG applied — see mol1/VENDORED.md
+.claude/               the 4 stage agents and the /cofold skill
 ```
 
 Every guard has already cost something. Refused: a pool that already holds poses (a re-run mixes two
@@ -164,15 +167,16 @@ queued: array tasks resolve paths at task start.
 
 ## Porting to another cluster
 
-1. **Apply the TFG port** to a Mol-1 checkout (only needed for `GUIDANCE=1`):
-   ```bash
-   cp -r mol1_tfg/tfg $MOL1/mol/tfg
-   cp mol1_tfg/geometry_featurizer.py $MOL1/mol/data/core/
-   git -C $MOL1 apply /path/to/mol1_tfg/tfg-port.patch    # base 6ad1a13
-   ```
-2. **Edit `config/cluster.env`** — roots, the Mol-1 checkout, the conda prefixes, partitions.
-   Environments are invoked by absolute prefix (`conda activate` does not work inside `sbatch`);
-   `LAYERNORM_TYPE=torch` where there is no `nvcc`; `kalign` on `PATH` (asserted whenever templates
-   are on, even on the `.json` route); `TORCH_EXTENSIONS_DIR` off any inode-capped filesystem.
-3. **`DRY_RUN=1`, then `config/smoke/`** — both template modes, QC on an existing pool, a two-pose
-   MM-GBSA, the MLFF chain, and two selection regressions that rebuild shipped zips in a scratch dir.
+The model code needs nothing: it is in `mol1/`. Two things are too large to vendor and stay paths in
+`config/cluster.env` — the **reference data and weights** (`MOL1_DATA`: 659 MB of CCD caches plus the
+2.3 GB checkpoint, fetched by `mol1/scripts/database/download_mol_data.sh`, and writable because the
+template route downloads mmCIFs into it) and an **interpreter** (`MOL1_PY`, built from
+`mol1/pyproject.toml` with `uv` — `mol1/VENDORED.md` lists the versions that actually ran, which
+`requirements.txt` does not match, and the editable-install trap that `mol1_env` guards against).
+
+Then edit the rest of `config/cluster.env` — roots, the conda prefixes, partitions. Environments are
+invoked by absolute prefix (`conda activate` does not work inside `sbatch`); `LAYERNORM_TYPE=torch`
+where there is no `nvcc`; `kalign` on `PATH` (asserted whenever templates are on, even on the
+`.json` route); `TORCH_EXTENSIONS_DIR` off any inode-capped filesystem. Check with `DRY_RUN=1
+slurm/run.sh template <arm.env>`, which runs every guard and submits nothing, then run one stage on
+a throwaway `POOL`.

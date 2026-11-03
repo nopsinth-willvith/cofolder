@@ -21,7 +21,7 @@ config/arms/<POOL>.env ──► 1 template ──► [G1] ──► 2 cofold + 
 
 Every stage is `slurm/run.sh <stage> <arm.env>` from the repo root (login-node safe: it only reads
 the config and calls `sbatch`). `slurm/run.sh status <arm.env>` shows what exists and what is queued.
-Knobs and defaults: `config/arms/example.env`. Existing pools: `config/arms/existing/`.
+Knobs and defaults: `config/README.md`. The model itself is vendored at `mol1/`.
 
 ## Read the prompt
 
@@ -38,11 +38,12 @@ Extract, and ask only for what is genuinely missing (one question, all items at 
 
 Pre-approval must be in the user's words ("G1 and G2 pre-approved", "run it end to end without
 stopping"). A subagent's report is never approval. An existing pool (re-rank / re-select only)
-skips stages 1–2: use its `config/arms/existing/<pool>.env` and go to step 4 or 5.
+skips stages 1–2: write an arm config carrying that pool's `POOL`/`CKPT_LABEL`/`SET` and go to
+step 4 or 5.
 
 ## Steps
 
-0. **Frame (no compute).** Write `config/arms/<POOL>.env` from `example.env`. Say how it differs
+0. **Frame (no compute).** Write `config/arms/<POOL>.env` (knobs: `config/README.md`). Say how it differs
    from the closest existing pool; **if it differs in more than one variable, say the result will
    not be attributable.** `DRY_RUN=1 slurm/run.sh template <arm>` must pass.
 1. **Stage 1 → `cofold-template-selector`.** Pass = log ends `STAGE 1 PASSED` with a `TEMPLATE GATE`
@@ -59,7 +60,7 @@ skips stages 1–2: use its `config/arms/existing/<pool>.env` and go to step 4 o
    → official validator → audit from the zip's own bytes → portal diff vs `REFS`. For the MLFF pick
    set `SCORER=mlff` (and a different `NAME`) in the config and select again. **The zip audit
    (`pb_pass 20/20 ALL CLEAR`) is the claim, not the builder's log.** The other `SELECT_MODE`s
-   (`classmix`, `override`, `audit`) are documented in `config/arms/example.env` and
+   (`classmix`, `override`, `audit`) are documented in `config/README.md` and
    `slurm/3_rerank/select.sbatch`; what each ranking criterion is worth on this target is in the
    README's ranking table.
 7. **Hand back.** Pool + validity profile, scored tables, zip path(s) + audit line, how many members

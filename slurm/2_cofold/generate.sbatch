@@ -20,12 +20,12 @@ set -uo pipefail
 # "D random rows per recycle" (and the query row is not guaranteed to survive). Leaving both unset
 # in Mol-1 is a STOCHASTIC-depth arm, not a full-MSA one, so lib.sh pins both to 16384.
 #
-# GUIDANCE=1 turns on the TFG chemistry guidance (mol1_tfg/ port). A guided run is NOT
+# GUIDANCE=1 turns on the TFG chemistry guidance (vendored in mol1/). A guided run is NOT
 # seed-comparable to an unguided one even at zero weight (mol/tfg/engine.py:493 draws an extra
 # randn per step). PocketPotential must stay at interval 0 (chain keys hardcoded from another
 # campaign).
 source "${COFOLDER:?submit via slurm/run.sh}/slurm/lib.sh" && cofold_load || exit 1
-mol1_env
+mol1_env || exit 1
 
 LIG=$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" "$IDX")
 [ -n "$LIG" ] || { echo "FATAL: no input at index $SLURM_ARRAY_TASK_ID of $IDX"; exit 1; }
