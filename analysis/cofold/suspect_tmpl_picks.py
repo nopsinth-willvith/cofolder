@@ -31,9 +31,10 @@ from __future__ import annotations
 
 import csv
 import math
+import os
 from pathlib import Path
 
-R = Path("/vast.mnt/project/bme-20255165-cofolding-physics")
+R = Path(os.environ.get("COFOLD_ROOT", "/vast.mnt/project/bme-20255165-cofolding-physics"))
 D, S = R / "data/cyp3a4_mol1", R / "data/cyp3a4_mol1/submission"
 T2 = {l.strip() for l in (R / "data/cyp3a4_xmodel/typeii_base_ids.txt").read_text().split()
       if l.strip()}

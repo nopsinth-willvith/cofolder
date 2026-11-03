@@ -28,9 +28,10 @@ from __future__ import annotations
 
 import csv
 import math
+import os
 from pathlib import Path
 
-R = Path("/vast.mnt/project/bme-20255165-cofolding-physics")
+R = Path(os.environ.get("COFOLD_ROOT", "/vast.mnt/project/bme-20255165-cofolding-physics"))
 D, S = R / "data/cyp3a4_mol1", R / "data/cyp3a4_mol1/submission"
 POSES = D / "poses"
 SUSPECT = ["OCNT-2312966", "OCNT-2395328", "OCNT-2315379", "OCNT-2395460", "OCNT-2535422"]

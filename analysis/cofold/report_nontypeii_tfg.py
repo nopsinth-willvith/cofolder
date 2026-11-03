@@ -18,6 +18,7 @@ Env: sigmadock (stdlib only). CPU, seconds.
 from __future__ import annotations
 
 import argparse
+import os
 import csv
 import math
 import sys
@@ -26,7 +27,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from compare_zip_metrics import med, num, read, read_by_pose, sign_test  # noqa: E402
 
-R = Path("/vast.mnt/project/bme-20255165-cofolding-physics")
+R = Path(os.environ.get("COFOLD_ROOT", "/vast.mnt/project/bme-20255165-cofolding-physics"))
 S = R / "data/cyp3a4_mol1/submission"
 G = R / "data/cyp3a4_ob0_mmgbsa"
 D = R / "data/cyp3a4_mol1"

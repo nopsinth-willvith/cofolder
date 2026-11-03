@@ -17,11 +17,12 @@ Env: sigmadock (stdlib only). CPU, seconds.
 from __future__ import annotations
 
 import argparse
+import os
 import csv
 import sys
 from pathlib import Path
 
-R = Path("/vast.mnt/project/bme-20255165-cofolding-physics")
+R = Path(os.environ.get("COFOLD_ROOT", "/vast.mnt/project/bme-20255165-cofolding-physics"))
 T2_FILE = R / "data/cyp3a4_xmodel/typeii_base_ids.txt"
 
 

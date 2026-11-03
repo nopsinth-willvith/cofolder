@@ -9,12 +9,13 @@ Two questions the submission log raises but does not answer:
 Pairing is per ligand on the pool's BEST (most negative) delta_total, because that is the
 quantity the selector actually acts on.
 """
-import csv, math, sys
+import csv, math, os, sys
 from collections import defaultdict
 from pathlib import Path
 
-G = Path("/vast.mnt/project/bme-20255165-cofolding-physics/data/cyp3a4_ob0_mmgbsa")
-D = Path("/vast.mnt/project/bme-20255165-cofolding-physics/data/cyp3a4_mol1")
+R = Path(os.environ.get("COFOLD_ROOT", "/vast.mnt/project/bme-20255165-cofolding-physics"))
+G = R / "data/cyp3a4_ob0_mmgbsa"
+D = R / "data/cyp3a4_mol1"
 # The coordinating / non-coordinating Fe-ligand prior from the 122-structure CYP3A4 curation.
 FE_COORD_PRIOR = 2.58
 

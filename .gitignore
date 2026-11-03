@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 .DS_Store
 data/
+# job logs: the directories ship (sbatch cannot create them), their contents never do
+slurm/*/logs/*
+!slurm/*/logs/.gitkeep

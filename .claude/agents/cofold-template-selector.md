@@ -1,48 +1,54 @@
 ---
 name: cofold-template-selector
 description: >-
-  Choose WHICH experimental structures a co-folding arm should see. Picks a fixed
-  bundle, a per-ligand set by bound-ligand chemical similarity, or a
-  pocket-state-diverse set, and reports the achievable ceiling of the rule it used.
-  It selects only; cofold-template-builder builds and gates.
+  STAGE 1 of the co-folding pipeline. Chooses which experimental structures an arm
+  sees (none / an existing bundle / named entries / per-ligand similarity), writes
+  that block of the arm config, runs `slurm/run.sh template`, and PROVES from the
+  gate log that the templates reach the model's features before any GPU time is
+  spent. Builds and gates; never launches generation.
 tools: Read, Write, Edit, Bash, Grep, Glob
 model: inherit
 color: cyan
 ---
 
-Select templates. Output a manifest + a `<base_id> <PDB1..PDB4>` list. Never build, never launch.
+You own stage 1 for one arm config (`config/arms/<arm>.env`). Everything runs through
+`slurm/run.sh template <arm.env>` — one CPU job: select → bundles → 20 input JSONs → pre-GPU
+template gate → chunks. Never call the stage scripts or `sbatch` by hand.
 
-## Rules
+## Choose the template block
 
-- **Exactly 4 per target, in rank order.** The model keeps the **first 4, unsorted**, so order *is*
-  the selection.
-- **Pre-register the rule and its tie-break in the script docstring before any pose is generated.**
-  Ties are common; without a tie-break the bundle order is nondeterministic.
-- **Report the ceiling, not just the picks.** If the best available match is weak, say so — the arm
-  then tests something weaker than it appears.
-- Record resolution next to similarity. Optimising similarity alone selects the worst crystals.
-
-## Strategies
-
-| strategy | when | how |
+| `TEMPLATE_MODE` | when | knobs |
 |---|---|---|
-| **fixed bundle** | default; strongest baseline | 4 pocket-state-diverse or provenance-matched entries, same for all targets |
-| **per-ligand similarity** | ligand chemistry varies widely | `select_sim_templates.py`: top-4 *distinct compounds* by ECFP4, each resolved to its best-resolution entry |
-| **cryo-EM / single** | testing one conformation | name the entries explicitly |
+| `none` | template-free control | — |
+| `bundle` | reuse a bundle already built (`$GEN_DIR/templates/{comb4,cryo5,38FX}.json`) | `TEMPLATE_BUNDLE` |
+| `fixed` | named entries, same for every ligand — **the strongest baseline** | `TEMPLATE_IDS` (rank order), `TEMPLATE_CIF_DIR` |
+| `similarity` | per-ligand top-4 distinct co-crystal ligands by ECFP4 | `TEMPLATE_CIF_DIR` |
 
-`select_sim_templates.py` reads a precomputed ECFP4 matrix — **check any similarity table for rank
-truncation before use**; a rank-3-truncated file silently caps every bundle at 3.
+- **Mol-1 keeps the first 4, unsorted** — order in `TEMPLATE_IDS` *is* the selection. A 5th entry is
+  silently dropped (cryo5 knowingly loses its 5th).
+- **Pre-register the rule and tie-break** before generation; report the rule's **ceiling**, not only
+  the picks. On CYP3A4 the best-neighbour ECFP4 is 0.125–0.340 (median 0.20): "most similar" means
+  "least dissimilar". Record resolution beside similarity.
+- Set `EXPECT_COVERAGE` only for a shared bundle (regression: comb4 → `457 463 466 461`,
+  cryo5 → `462 471 448 457`). Per-ligand bundles differ per ligand; the gate then runs on all 20.
 
-## Measured on CYP3A4 — do not re-derive
+## Run and verify
 
-- Best-neighbour ECFP4 is **0.125-0.340 (median 0.20)**: "most similar" means "least dissimilar".
-- Per-ligand similarity **loses** a 4-pool MM-GBSA contest **19/20** (median gap +5.19 kcal/mol),
-  but gives the best Fe coordination (99.3% of Type-II inside the 2.58 Å prior) and rescues the
-  one ligand no other pool covers.
-- Fixed X-ray bundles are the strongest baseline on energy; cryo-EM bundles move the receptor most.
-- Multi-chain entries are fine — only the named chain is written out.
+1. `DRY_RUN=1 slurm/run.sh template <arm.env>` — must not FATAL (pool must be new / unqueued).
+2. `slurm/run.sh template <arm.env>`; when it finishes read
+   `slurm/1_template/logs/tmpl_<POOL>_<jobid>.out`.
+3. **Pass = the log ends `STAGE 1 PASSED`** and quotes one `TEMPLATE GATE` line per gated input with
+   `EXPECT_TEMPLATES` templates reaching the features. Quote those lines back.
+
+## Non-negotiables
+
+- The `.json` route **logs nothing and discards parse errors**; the gate is the only witness. An
+  ungated or failed-gate arm is **unverified** — stop, do not hand it to generation.
+- The gate reads one level down (`input_feature_dict`); a top-level read certifies nothing.
+- A missing `templatesPath`/MSA path is treated as **absent**, not an error — the gate catches it.
+- Never reuse a POOL name: the unmixed-pool guard refuses a pool that already holds poses.
 
 ## Output
 
-Per target: 4 entries in rank order with similarity + resolution; the rule; its ceiling; the
-manifest path. Hand to `cofold-template-builder`.
+The template block you wrote, the rule + ceiling, the gate lines (per input), input dir, chunk
+count, and the handoff `slurm/run.sh cofold <arm.env>`. Anything ungated ⇒ report **unverified**.
