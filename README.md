@@ -1,4 +1,40 @@
-# cofolder
+# Cofolder: Agentic workflow for biomolecular structure prediction
+
+![cofolder pipeline: per-ligand template selection from a co-crystal database, Mol-1 co-folding of the query ligand into the receptor, and MM-GBSA physics-based re-ranking of the resulting poses](assets/workflow.jpeg)
+
+Left to right, that is the whole pipeline and the whole repo: **templates chosen by ligand
+chemistry** condition the sampler, **co-folding** turns one query ligand into a pose pool, and
+**physics-based re-ranking** — not the model's own confidence — decides which pose ships.
+
+## How it runs: one prompt, four agents, two spend gates
+
+Each box in the figure is a stage with its own agent, its own `sbatch` chain, and one thing it must
+*prove from a log* before the next stage is allowed to spend anything. `/cofold` drives all four
+from a single prompt, against one arm config (`config/arms/<arm>.env`); every stage is also
+`slurm/run.sh <stage> <arm.env>` by hand.
+
+| stage | agent | spend | the witness it must produce |
+|---|---|---|---|
+| 1 template | `cofold-template-selector` | CPU ~10 min | `STAGE 1 PASSED` + a `TEMPLATE GATE` line per input — the templates reached the model's own `input_feature_dict`, one level down |
+| 2 cofold | `cofold-generator` | **GPU ~3 h** | the per-task config echo (`templates= msa_min= ckpt_label=`), `Guidance is enabled.` when guided, and the per-target pose counts off the QC table |
+| 3 rerank | `cofold-mmgbsa-scorer` | **~200 CPU-h / 1000 poses** | the pose count read off the poselist *before* submitting, then the merged `scored_<SET>.csv` attributed to its checkpoint |
+| 3b MLFF | `cofold-mlff-scorer` | ~70 CPU-s/pose | which picks `E_int` moves, and whether the margin clears Orb's **0.131 eV** self-noise |
+| select | main conversation | CPU ~20 min | the audit re-run **on the shipped zip's own bytes**, never the builder's log |
+
+Two approval gates sit at the irreversible spends — **G1** before the GPU array and **G2** before
+the CPU-hours — and each one prints what it is about to buy (gate result, chunks × ligands, expected
+poses; or poses, shards, CPU-hours, and that no shard family exists) and stops for a human unless
+the prompt pre-approved it in the user's own words. A subagent's report is never approval.
+
+The discipline underneath is one rule: **an unwitnessed switch is a failed run, not a caveat.** The
+`.json` template route logs nothing and discards parse errors, `sbatch --export` splits on commas
+and exits 0, and a pool re-run under a second config is inseparable forever — so the agents refuse
+rather than work around, and stop on a gate that cannot certify, a starved ligand, a pose count far
+off projection, an arm differing from its control in more than one variable, or a zip audit below
+20/20. None of them decides what a result *means*: the targets are blinded, so no stage here
+measures correctness, and that comparison stays with the user.
+
+---
 
 Three ways to spend more compute at **inference** time on a co-folding model, and what each one was
 worth on a blinded protein–ligand set:
@@ -140,13 +176,8 @@ slurm/run.sh template config/arms/myarm.env   # then: cofold → rerank → sele
 commands and runs every guard without submitting. `run.sh` itself does no compute: login-node safe.
 Each stage chains its own follow-ups (QC behind generation; merge and MLFF behind the MM-GBSA array).
 
-**Four agents own the four stages** — `cofold-template-selector`, `cofold-generator`,
-`cofold-mmgbsa-scorer`, `cofold-mlff-scorer` — and each one's job is to produce the log line that
-proves its stage did what the config claims: the gate for templates, the per-task echo and guidance
-energies for generation, the pose count read off the poselist before ~200 CPU-h are spent. **An
-unwitnessed switch is a failed run, not a caveat.** `/cofold` drives all four from one prompt,
-stopping before the GPU array and before the scoring spend. None of them decides what a result means;
-that comparison stays with the user.
+The four stage agents and the two spend gates are described at the top of this README; their
+definitions live in `.claude/`, and `/cofold` drives all four from one prompt.
 
 ```
 config/cluster.env     WHERE things are: roots, MOL1_DATA, environments, partitions — per cluster
